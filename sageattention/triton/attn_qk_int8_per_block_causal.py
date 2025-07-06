@@ -36,10 +36,18 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
         k_mask = offs_n[None, :] < (kv_len - start_n)   
-        k = tl.load(K_ptrs, mask = k_mask)
-        k_scale = tl.load(K_scale_ptr)
-        qk = tl.dot(q, k).to(tl.float32) * q_scale * k_scale 
+        # patched to support triton 3.x
+        # k = tl.load(K_ptrs, mask = k_mask)
+        # k_scale = tl.load(K_scale_ptr)
+        # qk = tl.dot(q, k).to(tl.float32) * q_scale * k_scale 
 
+        k = tl.load(K_ptrs, mask = k_mask)
+        q = q.to(tl.float32)
+        k = k.to(tl.float32)
+        k_scale = tl.load(K_scale_ptr)
+        qk = tl.dot(q, k) * q_scale * k_scale
+
+        # end patch
         if STAGE == 2:
             mask = offs_m[:, None] >= (start_n + offs_n[None, :])
             qk = qk + tl.where(mask, 0, -1.0e6)
