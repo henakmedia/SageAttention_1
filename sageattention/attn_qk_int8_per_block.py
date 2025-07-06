@@ -14,8 +14,11 @@ def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
         start_n = tl.multiple_of(start_n, BLOCK_N)
         k_mask = offs_n[None, :] < (kv_len - start_n)   
         k = tl.load(K_ptrs, mask = k_mask)
+        q = q.to(tl.float32)
+        k = k.to(tl.float32)
         k_scale = tl.load(K_scale_ptr)
-        qk = tl.dot(q, k).to(tl.float32) * q_scale * k_scale 
+        qk = tl.dot(q, k) * q_scale * k_scale
+
         m_ij = tl.maximum(m_i, tl.max(qk, 1))
         qk = qk - m_ij[:, None]
         p = tl.math.exp2(qk)
