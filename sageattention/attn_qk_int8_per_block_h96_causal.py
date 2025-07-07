@@ -98,9 +98,9 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
 
 
 def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.float16):
-    BLOCK_M = 128
+    BLOCK_M = 64
     BLOCK_N = 64
-    stage = 3
+    stage = 1
 
     o = torch.empty(q.shape, dtype=output_dtype, device=q.device)
 
@@ -143,8 +143,9 @@ def forward(q, k, v, q_scale, k_scale, tensor_layout="HND", output_dtype=torch.f
         qo_len, kv_len,
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K,  
         STAGE=stage,  
-        num_warps=8,  
-        num_stages=4)
+        num_warps=4 if head_dim == 64 else 8,
+        num_stages=2 if head_dim == 64 else 4)
+
     return o
 
 
