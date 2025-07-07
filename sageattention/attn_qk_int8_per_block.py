@@ -3,40 +3,44 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
-                    K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn, 
-                    start_m,  
-                    BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  
-                    STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  
+def _attn_fwd_inner(acc, l_i, m_i, q_int8, q_scale, kv_len,
+                    K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
+                    start_m,
+                    BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,
+                    STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,
                     ):
     lo, hi = 0, kv_len
     for start_n in range(lo, hi, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
-        k_mask = offs_n[None, :] < (kv_len - start_n)   
-        k = tl.load(K_ptrs, mask = k_mask)
-        q = q.to(tl.float32)
-        k = k.to(tl.float32)
+
+        k_mask = offs_n[None, :] < (kv_len - start_n)
+        k = tl.load(K_ptrs, mask=k_mask).to(tl.float32)
+
+        # ✅ convert q separately and keep it float
+        q_fp32 = q_int8.to(tl.float32)
         k_scale = tl.load(K_scale_ptr)
-        qk = tl.dot(q, k) * q_scale * k_scale
+
+        qk = tl.dot(q_fp32, k) * q_scale * k_scale
 
         m_ij = tl.maximum(m_i, tl.max(qk, 1))
         qk = qk - m_ij[:, None]
         p = tl.math.exp2(qk)
         l_ij = tl.sum(p, 1)
-        
+
         alpha = tl.math.exp2(m_i - m_ij)
         l_i = l_i * alpha + l_ij
-        
         acc = acc * alpha[:, None]
-        
-        v = tl.load(V_ptrs, mask = offs_n[:, None] < (kv_len - start_n))
+
+        v = tl.load(V_ptrs, mask=offs_n[:, None] < (kv_len - start_n))
         p = p.to(tl.float16)
-        
-        acc += tl.dot(p, v, out_dtype=tl.float16)   
+
+        acc += tl.dot(p, v, out_dtype=tl.float16)
         m_i = m_ij
+
         K_ptrs += BLOCK_N * stride_kn
         K_scale_ptr += 1
         V_ptrs += BLOCK_N * stride_vn
+
     return acc, l_i
 
 @triton.jit
@@ -75,11 +79,12 @@ def _attn_fwd(Q, K, V, Q_scale, K_scale, Out,
     
     q = tl.load(Q_ptrs, mask = offs_m[:, None] < qo_len)
     q_scale = tl.load(Q_scale_ptr)
-    acc, l_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len, K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
-                                    start_m,  
-                                    BLOCK_M, HEAD_DIM, BLOCK_N,  
-                                    4 - STAGE, offs_m, offs_n 
-                                    )
+    acc, l_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, kv_len,
+                            K_ptrs, K_scale_ptr, V_ptrs, stride_kn, stride_vn,
+                            start_m,
+                            BLOCK_M, HEAD_DIM, BLOCK_N,
+                            4 - STAGE, offs_m, offs_n)
+
     acc = acc / l_i[:, None]
     tl.store(O_block_ptr, acc.to(Out.type.element_ty), mask = (offs_m[:, None] < qo_len))
 
